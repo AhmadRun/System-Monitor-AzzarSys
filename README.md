@@ -1,4 +1,4 @@
-# SysMon — Linux System Monitor
+# AzzarSys — Linux System Monitor
 
 A real-time terminal-based system monitor for Linux written in C++17 with zero external dependencies.
 
