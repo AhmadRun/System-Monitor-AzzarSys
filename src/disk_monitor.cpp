@@ -18,6 +18,23 @@ static bool isPhysicalFilesystem(const std::string& fstype) {
     return pseudo.find(fstype) == pseudo.end();
 }
 
+// /proc/mounts escapes spaces, tabs, newlines and backslashes as octal (\040 etc.).
+static std::string unescapeMountField(const std::string& s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 3 < s.size() &&
+            s[i + 1] >= '0' && s[i + 1] <= '7' &&
+            s[i + 2] >= '0' && s[i + 2] <= '7' &&
+            s[i + 3] >= '0' && s[i + 3] <= '7') {
+            out += static_cast<char>((s[i + 1] - '0') * 64 + (s[i + 2] - '0') * 8 + (s[i + 3] - '0'));
+            i += 3;
+        } else {
+            out += s[i];
+        }
+    }
+    return out;
+}
+
 std::vector<DiskInfo> DiskMonitor::getDiskInfo() {
     std::vector<DiskInfo> disks;
     std::set<std::string> seen;
@@ -31,7 +48,8 @@ std::vector<DiskInfo> DiskMonitor::getDiskInfo() {
     while (std::getline(mounts, line)) {
         std::istringstream iss(line);
         std::string device, mountpoint, fstype;
-        iss >> device >> mountpoint >> fstype;
+        if (!(iss >> device >> mountpoint >> fstype)) continue;
+        mountpoint = unescapeMountField(mountpoint);
 
         if (!isPhysicalFilesystem(fstype)) continue;
         if (seen.count(mountpoint)) continue;
@@ -54,7 +72,9 @@ std::vector<DiskInfo> DiskMonitor::getDiskInfo() {
         d.totalSize = total;
         d.usedSize = used;
         d.availableSize = available;
-        d.usedPercent = total > 0 ? 100.0 * used / total : 0.0;
+        // Same formula as df: blocks reserved for root count as neither used nor available.
+        unsigned long long usable = used + available;
+        d.usedPercent = usable > 0 ? 100.0 * used / usable : 0.0;
 
         if (total == 0) continue;
 

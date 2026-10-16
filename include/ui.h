@@ -41,4 +41,5 @@ private:
     int savedTermFlags = 0;
     bool rawMode = false;
     bool running = true;
+    bool cleanedUp = false;
 };

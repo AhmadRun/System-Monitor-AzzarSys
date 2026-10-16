@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <termios.h>
 #include <fcntl.h>
+#include <csignal>
+#include <cstdio>
 
 #define CLEAR_LINE "\033[2K"
 #define HOME       "\033[H"
@@ -26,6 +28,21 @@ static void printLineF(const char* fmt, Args... args) {
     std::cout << CLEAR_LINE << buf << "\n";
 }
 
+// Builds "[####......]". The percentage is clamped so a bad reading can never
+// draw past the bar.
+static std::string makeBar(double percent, int width) {
+    if (!(percent > 0.0)) percent = 0.0;
+    if (percent > 100.0) percent = 100.0;
+    int used = static_cast<int>(percent / 100.0 * width);
+    return "[" + std::string(used, '#') + std::string(width - used, '.') + "]";
+}
+
+static volatile std::sig_atomic_t stopRequested = 0;
+
+static void handleStopSignal(int) {
+    stopRequested = 1;
+}
+
 SystemMonitorUI::SystemMonitorUI() {
     cpuMonitor = std::make_unique<CPUMonitor>();
     memoryMonitor = std::make_unique<MemoryMonitor>();
@@ -33,6 +50,16 @@ SystemMonitorUI::SystemMonitorUI() {
     processMonitor = std::make_unique<ProcessMonitor>();
     networkMonitor = std::make_unique<NetworkMonitor>();
     systemInfoMonitor = std::make_unique<SystemInfoMonitor>();
+
+    // Ctrl+C / kill would otherwise exit without restoring the terminal,
+    // leaving echo off and the cursor hidden.
+    struct sigaction sa {};
+    sa.sa_handler = handleStopSignal;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGHUP, &sa, nullptr);
+
     enableRawMode();
 }
 
@@ -68,8 +95,10 @@ void SystemMonitorUI::disableRawMode() {
 }
 
 void SystemMonitorUI::cleanup() {
+    if (cleanedUp) return;
+    cleanedUp = true;
     disableRawMode();
-    std::cout << CURS_ON << "\033[0m" << std::flush;
+    std::cout << CURS_ON << "\033[0m\n" << std::flush;
 }
 
 int SystemMonitorUI::getchNonBlock() {
@@ -79,11 +108,16 @@ int SystemMonitorUI::getchNonBlock() {
 }
 
 void SystemMonitorUI::run() {
-    while (running) {
+    while (running && !stopRequested) {
         drawAll();
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        int ch = getchNonBlock();
-        if (ch == 'q' || ch == 'Q') running = false;
+        // Poll for input in short steps so 'q' and Ctrl+C respond quickly.
+        for (int i = 0; i < 10 && running && !stopRequested; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            int ch;
+            while ((ch = getchNonBlock()) != -1) {
+                if (ch == 'q' || ch == 'Q') running = false;
+            }
+        }
     }
     cleanup();
 }
@@ -120,52 +154,21 @@ void SystemMonitorUI::drawSystemInfo() {
 void SystemMonitorUI::drawCPUInfo() {
     CPUInfo info = cpuMonitor->getCPUInfo();
 
-    int barWidth = 20;
-    int used = static_cast<int>(info.totalUsage / 100.0 * barWidth);
-    int free = barWidth - used;
-
-    {
-        char bar[32];
-        int p = 0;
-        bar[p++] = '[';
-        for (int i = 0; i < used; i++) bar[p++] = '#';
-        for (int i = 0; i < free; i++) bar[p++] = '.';
-        bar[p++] = ']';
-        bar[p] = '\0';
-        printLineF("CPU Total: %6.2f%%  %s  Load: %.2f %.2f %.2f",
-                   info.totalUsage, bar, info.loadAvg1, info.loadAvg5, info.loadAvg15);
-    }
+    printLineF("CPU Total: %6.2f%%  %s  Load: %.2f %.2f %.2f",
+               info.totalUsage, makeBar(info.totalUsage, 20).c_str(),
+               info.loadAvg1, info.loadAvg5, info.loadAvg15);
 
     printLine("Per-Core:");
     for (size_t i = 0; i < info.coreUsage.size() && i < 16; ++i) {
-        int w = 10;
-        int u = static_cast<int>(info.coreUsage[i] / 100.0 * w);
-        char bar[16];
-        int p = 0;
-        bar[p++] = '[';
-        for (int j = 0; j < u; j++) bar[p++] = '#';
-        for (int j = 0; j < w - u; j++) bar[p++] = '.';
-        bar[p++] = ']';
-        bar[p] = '\0';
-        printLineF("  Core %2zu: %6.2f%%  %s", i, info.coreUsage[i], bar);
+        printLineF("  Core %2zu: %6.2f%%  %s", i, info.coreUsage[i],
+                   makeBar(info.coreUsage[i], 10).c_str());
     }
 }
 
 void SystemMonitorUI::drawMemoryInfo() {
     MemoryInfo m = memoryMonitor->getMemoryInfo();
-    int barWidth = 20;
-    int used = static_cast<int>(m.memoryPercent / 100.0 * barWidth);
-    int free = barWidth - used;
-
-    char bar[32];
-    int p = 0;
-    bar[p++] = '[';
-    for (int i = 0; i < used; i++) bar[p++] = '#';
-    for (int i = 0; i < free; i++) bar[p++] = '.';
-    bar[p++] = ']';
-    bar[p] = '\0';
     printLineF("Memory: %5.1f%%  %s  %lu / %lu MB",
-               m.memoryPercent, bar,
+               m.memoryPercent, makeBar(m.memoryPercent, 20).c_str(),
                m.usedMemory / (1024 * 1024), m.totalMemory / (1024 * 1024));
 }
 
@@ -173,17 +176,8 @@ void SystemMonitorUI::drawDiskInfo() {
     auto disks = diskMonitor->getDiskInfo();
     printLine("Disks:");
     for (const auto& d : disks) {
-        int w = 10;
-        int u = static_cast<int>(d.usedPercent / 100.0 * w);
-        char bar[16];
-        int p = 0;
-        bar[p++] = '[';
-        for (int i = 0; i < u; i++) bar[p++] = '#';
-        for (int i = 0; i < w - u; i++) bar[p++] = '.';
-        bar[p++] = ']';
-        bar[p] = '\0';
         printLineF("  %-15s %6.2f%% %s  %lu / %lu MB",
-                   d.mountPoint.c_str(), d.usedPercent, bar,
+                   d.mountPoint.c_str(), d.usedPercent, makeBar(d.usedPercent, 10).c_str(),
                    d.usedSize / (1024 * 1024), d.totalSize / (1024 * 1024));
     }
 }
@@ -207,7 +201,7 @@ void SystemMonitorUI::drawProcessesInfo() {
     printLine("Top Processes (by CPU):");
     printLineF("  %-5s  %-20s %6s  %5s", "PID", "NAME", "CPU%", "MEM");
     for (const auto& p : procs) {
-        printLineF("  %-5d  %-20s %6.2f  %5lu MB",
+        printLineF("  %-5d  %-20.20s %6.2f  %5lu MB",
                    p.pid, p.name.c_str(), p.cpuPercent, p.memoryMB);
     }
 }
