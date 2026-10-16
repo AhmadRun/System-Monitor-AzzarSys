@@ -4,6 +4,23 @@
 #include <chrono>
 #include <thread>
 
+// /proc/stat columns: user nice system idle iowait irq softirq steal guest guest_nice.
+// guest and guest_nice are already counted in user and nice, so they are left out
+// of the total, and iowait counts as idle time (the same as top and htop).
+static void sumTimes(const std::vector<long>& t, long& total, long& idle) {
+    total = 0;
+    for (size_t i = 0; i < t.size() && i < 8; ++i) total += t[i];
+    idle = t[3] + (t.size() > 4 ? t[4] : 0);
+}
+
+static double usagePercent(long dTotal, long dIdle) {
+    if (dTotal <= 0) return 0.0;
+    double pct = 100.0 * (dTotal - dIdle) / dTotal;
+    if (pct < 0.0) return 0.0;
+    if (pct > 100.0) return 100.0;
+    return pct;
+}
+
 CPUInfo CPUMonitor::getCPUInfo() {
     CPUInfo info;
 
@@ -28,28 +45,24 @@ CPUInfo CPUMonitor::getCPUInfo() {
 
     // Total line
     auto& total = cpuTimes[0];
-    long totalTicks = 0, idleTicks = total[3];
-    for (auto t : total) totalTicks += t;
+    long totalTicks, idleTicks;
+    sumTimes(total, totalTicks, idleTicks);
 
     if (hasPrev) {
-        long deltaTotal = totalTicks - prevTotal.total;
-        long deltaIdle = idleTicks - prevTotal.idle;
-        if (deltaTotal > 0)
-            info.totalUsage = 100.0 * (deltaTotal - deltaIdle) / deltaTotal;
+        info.totalUsage = usagePercent(totalTicks - prevTotal.total,
+                                       idleTicks - prevTotal.idle);
     }
 
     // Per-core
     info.coreUsage.resize(cpuTimes.size() - 1);
     for (size_t i = 1; i < cpuTimes.size(); ++i) {
         auto& core = cpuTimes[i];
-        long coreTotal = 0, coreIdle = core[3];
-        for (auto t : core) coreTotal += t;
+        long coreTotal, coreIdle;
+        sumTimes(core, coreTotal, coreIdle);
 
         if (hasPrev && i - 1 < prevCores.size()) {
-            long dTotal = coreTotal - prevCores[i - 1].total;
-            long dIdle = coreIdle - prevCores[i - 1].idle;
-            if (dTotal > 0)
-                info.coreUsage[i - 1] = 100.0 * (dTotal - dIdle) / dTotal;
+            info.coreUsage[i - 1] = usagePercent(coreTotal - prevCores[i - 1].total,
+                                                 coreIdle - prevCores[i - 1].idle);
         }
     }
 
@@ -57,9 +70,9 @@ CPUInfo CPUMonitor::getCPUInfo() {
     prevTotal = {totalTicks, idleTicks};
     prevCores.clear();
     for (size_t i = 1; i < cpuTimes.size(); ++i) {
-        long ct = 0;
-        for (auto t : cpuTimes[i]) ct += t;
-        prevCores.push_back({ct, cpuTimes[i][3]});
+        long ct, ci;
+        sumTimes(cpuTimes[i], ct, ci);
+        prevCores.push_back({ct, ci});
     }
     hasPrev = true;
 

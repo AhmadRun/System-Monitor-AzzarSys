@@ -15,12 +15,14 @@ std::vector<NetworkInterface> NetworkMonitor::getNetworkInfo() {
     std::getline(netdev, line);
 
     while (std::getline(netdev, line)) {
-        std::istringstream iss(line);
-        std::string name;
-        if (!(iss >> name)) continue;
-
-        // name comes with trailing ':'
-        if (name.back() == ':') name.pop_back();
+        // The name ends at ':' and the first counter can follow it with no space
+        // (e.g. "eth0:123456 ..."), so split on the colon instead of whitespace.
+        auto colon = line.find(':');
+        if (colon == std::string::npos) continue;
+        std::string name = line.substr(0, colon);
+        name.erase(0, name.find_first_not_of(" \t"));
+        if (name.empty()) continue;
+        std::istringstream iss(line.substr(colon + 1));
 
         NetworkInterface ni;
         ni.name = name;
@@ -37,9 +39,8 @@ std::vector<NetworkInterface> NetworkMonitor::getNetworkInfo() {
 
             ni.bytesSent = t_bytes;
             ni.packetsSent = t_packets;
+            ifaces.push_back(ni);
         }
-
-        ifaces.push_back(ni);
     }
 
     netdev.close();

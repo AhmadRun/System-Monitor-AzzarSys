@@ -4,11 +4,11 @@
 #include <vector>
 
 struct CPUInfo {
-    double totalUsage;
+    double totalUsage = 0.0;
     std::vector<double> coreUsage;
-    double loadAvg1;
-    double loadAvg5;
-    double loadAvg15;
+    double loadAvg1 = 0.0;
+    double loadAvg5 = 0.0;
+    double loadAvg15 = 0.0;
 };
 
 class CPUMonitor {

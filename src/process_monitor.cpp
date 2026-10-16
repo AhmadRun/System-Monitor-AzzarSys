@@ -35,10 +35,10 @@ std::vector<ProcessInfo> ProcessMonitor::getTopProcesses(int count) {
 
     struct dirent* entry;
     while ((entry = readdir(dir)) != nullptr) {
-        if (entry->d_type != DT_DIR) continue;
+        if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN) continue;
         bool isNumber = true;
         for (char* p = entry->d_name; *p; p++) {
-            if (!std::isdigit(*p)) {
+            if (!std::isdigit(static_cast<unsigned char>(*p))) {
                 isNumber = false;
                 break;
             }
@@ -55,8 +55,10 @@ std::vector<ProcessInfo> ProcessMonitor::getTopProcesses(int count) {
             if (it != prevTicks.end()) {
                 unsigned long long prevProc = it->second.utime + it->second.stime;
                 unsigned long long curProc = currentTicks[pid].utime + currentTicks[pid].stime;
-                unsigned long long dProc = curProc - prevProc;
-                unsigned long long dSys = totalTicks - prevTotalTicks;
+                // A reused PID can have fewer ticks than the old process had,
+                // so guard the unsigned subtraction against wrapping around.
+                unsigned long long dProc = curProc > prevProc ? curProc - prevProc : 0;
+                unsigned long long dSys = totalTicks > prevTotalTicks ? totalTicks - prevTotalTicks : 0;
                 process.cpuPercent = dSys > 0 ? 100.0 * dProc / dSys : 0.0;
             } else {
                 process.cpuPercent = 0;
@@ -135,15 +137,15 @@ ProcessInfo ProcessMonitor::parseProcessInfo(int pid, std::unordered_map<int, Pr
                 std::istringstream uidStream(sl);
                 std::string label;
                 unsigned int uid;
-                uidStream >> label >> uid;
-                struct passwd* pwd = getpwuid(uid);
-                if (pwd) process.user = pwd->pw_name;
+                if (uidStream >> label >> uid) {
+                    struct passwd* pwd = getpwuid(uid);
+                    if (pwd) process.user = pwd->pw_name;
+                }
             } else if (sl.find("VmRSS:") == 0) {
                 std::istringstream rssStream(sl);
                 std::string label;
                 unsigned long rssKb;
-                rssStream >> label >> rssKb;
-                process.memoryMB = rssKb / 1024;
+                if (rssStream >> label >> rssKb) process.memoryMB = rssKb / 1024;
             }
         }
         status.close();

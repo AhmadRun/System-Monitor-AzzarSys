@@ -7,9 +7,9 @@ struct SystemInfo {
     std::string hostname;
     std::string osVersion;
     std::string kernelVersion;
-    int cpuCoreCount;
-    unsigned long uptime;
-    std::time_t bootTime;
+    int cpuCoreCount = 0;
+    unsigned long uptime = 0;
+    std::time_t bootTime = 0;
 };
 
 class SystemInfoMonitor {
