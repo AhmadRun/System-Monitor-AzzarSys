@@ -1,6 +1,6 @@
 # AzzarSys — Linux System Monitor
 
-A real-time terminal-based system monitor for Linux written in C++17 with zero external dependencies (needs CMake 3.16+ and a C++17 compiler).
+A real-time terminal-based system monitor for Linux written in C++23 with zero external dependencies (needs CMake 3.16+ and a C++23 compiler).
 
 ## Build
 
